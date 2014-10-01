@@ -25,7 +25,6 @@
 # include <stdio.h>
 # include <cuda.h>
 
-
 extern "C" {
 __global__ void temperature_update16x16(float* temp1_d, float* temp2_d, float alpha, 
                     float dt, const int N_x, const int N_y, const int N_z,
