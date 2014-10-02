@@ -26,15 +26,15 @@
 # include <cuda.h>
 
 extern "C" {
-__global__ void temperature_update16x16(float* temp1_d, float* temp2_d, float alpha, 
-                    float dt, const int N_x, const int N_y, const int N_z,
-                    const float dx, const float dy, const float dz){
+__global__ void temperature_update16x16(double* temp1_d, double* temp2_d, double alpha, 
+                    double dt, const int N_x, const int N_y, const int N_z,
+                    const double dx, const double dy, const double dz){
 
 
 #define BDIMX 16
 #define BDIMY 16
 
-__shared__ float slice[BDIMX+2][BDIMY+2];
+__shared__ double slice[BDIMX+2][BDIMY+2];
 
 int ix = blockIdx.x*blockDim.x + threadIdx.x;
 int iy = blockIdx.y*blockDim.y + threadIdx.y;
@@ -48,9 +48,9 @@ int o2d = 0;
 bool compute_if = ix > 0 && ix < (N_x-1) && iy > 0 && iy < (N_y-1);
 
 
-float behind;
-float current = temp1_d[i2d]; o2d = i2d; i2d += stride;
-float infront = temp1_d[i2d]; i2d += stride;
+double behind;
+double current = temp1_d[i2d]; o2d = i2d; i2d += stride;
+double infront = temp1_d[i2d]; i2d += stride;
 
 for(int i=1; i<N_z-1; i++){
 
