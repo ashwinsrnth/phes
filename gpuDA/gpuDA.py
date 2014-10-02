@@ -6,6 +6,7 @@ import pycuda.gpuarray as gpuarray
 class GpuDA:
 
     def __init__(self, comm, local_dims, proc_sizes, stencil_width):
+        
         self.comm = comm
         self.local_dims = local_dims
         self.proc_sizes = proc_sizes
@@ -16,12 +17,10 @@ class GpuDA:
         assert(self.size == reduce(lambda a,b: a*b, proc_sizes))
         self._create_halo_arrays()
    
-    def halo_swap(self, array, local_array):
-        
-        # Perform the halo swap on the
-        # gpuarray `array`, with the
-        # recv_halos holding the updated
-        # halo values after the swap.
+    def global_to_local(self, global_array, local_array):
+
+        # Update the local array (which includes ghost points)
+        # from the global array (which does not)
 
         npz, npy, npx = self.proc_sizes
         nz, ny, nx = self.local_dims
@@ -31,17 +30,17 @@ class GpuDA:
         assert(tuple(local_array.shape) == (nz+2*sw, ny+2*sw, nx+2*sw))
  
         # copy inner elements:
-        self._copy_global_to_local(array, local_array)
+        self._copy_global_to_local(global_array, local_array)
 
         # copy from arrays to send halos:
-        self._copy_array_to_halo(array, self.left_send_halo, [nz, ny, sw], [0, 0, 0])
-        self._copy_array_to_halo(array, self.right_send_halo, [nz, ny, sw], [0, 0, nx-1])
+        self._copy_array_to_halo(global_array, self.left_send_halo, [nz, ny, sw], [0, 0, 0])
+        self._copy_array_to_halo(global_array, self.right_send_halo, [nz, ny, sw], [0, 0, nx-1])
 
-        self._copy_array_to_halo(array, self.bottom_send_halo, [nz, sw, nx], [0, 0, 0])
-        self._copy_array_to_halo(array, self.top_send_halo, [nz, sw, nx], [0, ny-1, 0])
+        self._copy_array_to_halo(global_array, self.bottom_send_halo, [nz, sw, nx], [0, 0, 0])
+        self._copy_array_to_halo(global_array, self.top_send_halo, [nz, sw, nx], [0, ny-1, 0])
 
-        self._copy_array_to_halo(array, self.front_send_halo, [sw, ny, nx], [0, 0, 0])
-        self._copy_array_to_halo(array, self.back_send_halo, [sw, ny, nx], [nz-1, 0, 0])
+        self._copy_array_to_halo(global_array, self.front_send_halo, [sw, ny, nx], [0, 0, 0])
+        self._copy_array_to_halo(global_array, self.back_send_halo, [sw, ny, nx], [nz-1, 0, 0])
 
         # perform swaps in x-direction
         sendbuf = [self.right_send_halo.gpudata.as_buffer(self.right_send_halo.nbytes), MPI.DOUBLE]
@@ -79,6 +78,16 @@ class GpuDA:
 
         self._copy_halo_to_array(self.front_recv_halo, local_array, [sw, ny, nx], [0, sw, sw])
         self._copy_halo_to_array(self.back_recv_halo, local_array, [sw, ny, nx], [2*sw+nz-1, sw, sw])
+
+
+    def local_to_global(self, local_array, global_array):
+
+        # Update a global array (no ghost values)
+        # from a local array (which contains ghost values).
+        # This does *not* involve any communication.
+
+        self._copy_local_to_global(local_array, global_array)
+
 
     def _forward_swap(self, sendbuf, recvbuf, src, dest, loc, dimprocs):
         
@@ -145,7 +154,6 @@ class GpuDA:
         d, h, w  = copy_dims
         z_offs, y_offs, x_offs = copy_offsets
         
-        # TODO: a general type size
         typesize = array.dtype.itemsize
 
         copier = cuda.Memcpy3D()
@@ -206,29 +214,53 @@ class GpuDA:
         # perform the copy:
         copier()
 
-    def _copy_global_to_local(self, a_array, b_array, dtype=np.float64):
+    def _copy_global_to_local(self, global_array, local_array, dtype=np.float64):
 
-        # copy between two 3-d arrays
-        # a_array -> b_array
-        
         nz, ny, nx = self.local_dims
         sw = self.stencil_width
       
-        typesize = a_array.dtype.itemsize
+        typesize = global_array.dtype.itemsize
 
         copier = cuda.Memcpy3D()
-        copier.set_src_device(a_array.gpudata)
-        copier.set_dst_device(b_array.gpudata)
+        copier.set_src_device(global_array.gpudata)
+        copier.set_dst_device(local_array.gpudata)
 
         # offsets 
         copier.dst_x_in_bytes = sw*typesize
         copier.dst_y = sw
         copier.dst_z = sw
 
-        copier.src_pitch = a_array.strides[1] 
-        copier.dst_pitch = b_array.strides[1]
+        copier.src_pitch = global_array.strides[1] 
+        copier.dst_pitch = local_array.strides[1]
         copier.src_height = ny
         copier.dst_height = ny+2*sw
+
+        copier.width_in_bytes = nx*typesize
+        copier.height = ny
+        copier.depth = nz
+
+        copier()
+
+    def _copy_local_to_global(self, local_array, global_array, dtype=np.float64):
+
+        nz, ny, nx = self.local_dims
+        sw = self.stencil_width
+
+        typesize = global_array.dtype.itemsize
+
+        copier = cuda.Memcpy3D()
+        copier.set_src_device(local_array.gpudata)
+        copier.set_dst_device(global_array.gpudata)
+
+        # offsets
+        copier.src_x_in_bytes = sw*typesize
+        copier.src_x = sw
+        copier.src_y = sw
+
+        copier.src_pitch = local_array.strides[1]
+        copier.dst_pitch = global_array.strides[1]
+        copier.src_height = ny+2*sw
+        copier.dst_height = ny
 
         copier.width_in_bytes = nx*typesize
         copier.height = ny
