@@ -9,7 +9,7 @@ kernel: diffusion_kernel.cu
 
 test_kernel: diffusion_kernel.cu test_diffusion_kernel.py
 	make kernel
-	nosetests test_diffusion_kernel.py
+	nosetests --nocapture test_diffusion_kernel.py
 	rm *.pyc
 
 clean:
