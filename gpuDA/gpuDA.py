@@ -70,14 +70,23 @@ class GpuDA:
         self._backward_swap(sendbuf, recvbuf, self.rank+npx*npy, self.rank-npx*npy, zloc, npz)
         
         # copy from recv halos to local_array:
-        self._copy_halo_to_array(self.left_recv_halo, local_array, [nz, ny, sw], [sw, sw, 0])
-        self._copy_halo_to_array(self.right_recv_halo, local_array, [nz, ny, sw], [sw, sw, 2*sw+nx-1])
+        if self.has_neighbour('left'):
+            self._copy_halo_to_array(self.left_recv_halo, local_array, [nz, ny, sw], [sw, sw, 0])
+        
+        if self.has_neighbour('right'):
+            self._copy_halo_to_array(self.right_recv_halo, local_array, [nz, ny, sw], [sw, sw, 2*sw+nx-1])
 
-        self._copy_halo_to_array(self.bottom_recv_halo, local_array, [nz, sw, nx], [sw, 0, sw])
-        self._copy_halo_to_array(self.top_recv_halo, local_array, [nz, sw, nx], [sw, 2*sw+ny-1, sw])
+        if self.has_neighbour('bottom'):
+            self._copy_halo_to_array(self.bottom_recv_halo, local_array, [nz, sw, nx], [sw, 0, sw])
+        
+        if self.has_neighbour('top'):
+            self._copy_halo_to_array(self.top_recv_halo, local_array, [nz, sw, nx], [sw, 2*sw+ny-1, sw])
 
-        self._copy_halo_to_array(self.front_recv_halo, local_array, [sw, ny, nx], [0, sw, sw])
-        self._copy_halo_to_array(self.back_recv_halo, local_array, [sw, ny, nx], [2*sw+nz-1, sw, sw])
+        if self.has_neighbour('front'):
+            self._copy_halo_to_array(self.front_recv_halo, local_array, [sw, ny, nx], [0, sw, sw])
+        
+        if self.has_neighbour('back'):
+            self._copy_halo_to_array(self.back_recv_halo, local_array, [sw, ny, nx], [2*sw+nz-1, sw, sw])
 
 
     def local_to_global(self, local_array, global_array):
@@ -267,3 +276,41 @@ class GpuDA:
         copier.depth = nz
 
         copier()
+
+
+    def has_neighbour(self, side):
+        
+        # Check that the processor has a
+        # neighbour on a specified side
+        # side can be 'left', 'right', 'top' or 'bottom'
+        
+        npz, npy, npx = self.comm.Get_topo()[0]
+        mz, my, mx = self.comm.Get_topo()[2]
+        
+        if side == 'left' and mx > 0:
+            return True
+        
+        elif side == 'right' and mx < npx-1:
+            return True
+
+        elif side == 'bottom' and my > 0:
+            return True
+        
+        elif side == 'top' and my < npy-1:
+            return True
+
+        elif side == 'front' and mz > 0:
+            return True
+
+        elif side == 'back' and mz < npz-1:
+            return True
+
+        else:
+            return False
+       
+        
+
+
+
+
+
