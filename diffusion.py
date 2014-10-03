@@ -14,24 +14,32 @@ comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
 
-npz = 1
-npy = 1
-npx = 1
+npz = 3
+npy = 3
+npx = 3
 
 assert(size == npx*npy*npz)
 
 mod = cuda.module_from_file('diffusion_kernel.cubin')
 func = mod.get_function('temperature_update16x16')
 
-nx = 17
-ny = 17
-nz = 17
-alpha = 1.0
-dt = 0.0001
+# local sizes:
+nx = 398
+ny = 398
+nz = 398
 
-dx = 1./((npx*nx)-1)
-dy = 1./((npy*ny)-1)
-dz = 1./((npz*nz)-1)
+# global lengths:
+lx = 1.0
+ly = 1.0
+lz = 1.0
+
+# material properties:
+alpha = 1e-5
+dt = 0.01
+
+dx = lx/((npx*nx)-1)
+dy = ly/((npy*ny)-1)
+dz = lz/((npz*nz)-1)
 
 # create communicator:
 comm = comm.Create_cart([npz, npy, npx])
@@ -52,7 +60,7 @@ T1_local = np.zeros([nz+2, ny+2, nx+2], dtype=np.float64)
 T1_global = np.zeros([nz, ny, nx], dtype=np.float64)
 
 # set initial conditions:
-set_boundary_values(comm, T1_local, (500., 100., 100., 100., 100., 100.))
+set_boundary_values(comm, T1_local, (0., 0., 0., 0., 0., 500.))
 
 # transfer to gpu:
 T2_local_gpu = gpuarray.to_gpu(T2_local)
@@ -62,18 +70,35 @@ T1_global_gpu = gpuarray.to_gpu(T1_global)
 da.local_to_global(T1_local_gpu, T1_global_gpu)
 
 np.set_printoptions(precision=2)
+
+comm_time = np.zeros(1000)
+comp_time = np.zeros(1000)
+
+
+t_start = MPI.Wtime()
 for step in range(1000):
 
+    t1 = MPI.Wtime()
     da.global_to_local(T1_global_gpu, T1_local_gpu)
-    func.prepared_call((2, 2, 2), (16, 16, 1),
+    t2 = MPI.Wtime()
+
+    func.prepared_call(((nx+2)/16, (ny+2)/16, 1), (16, 16, 1),
                         T1_local_gpu.gpudata, T2_local_gpu.gpudata,
                         alpha, dt,
                         nx+2, ny+2, nz+2,
                         dx, dy, dz)
 
     da.local_to_global(T2_local_gpu, T1_global_gpu)
+    t3 = MPI.Wtime()
+
+    comp_time[step] = t3-t2
+    comm_time[step] = t2-t1
+
+t_end = MPI.Wtime()
 
 if rank == 0:
-    print T2_local_gpu.get()[1:-1,1:-1,1:-1]
-    print T1_global_gpu
+    print 'Computation: ', comp_time.mean()*1000
+    print 'Communication: ', comm_time.mean()*1000
+    print 'Total: ', t_end-t_start
+
 MPI.Finalize()
