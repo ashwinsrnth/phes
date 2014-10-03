@@ -263,8 +263,8 @@ class GpuDA:
 
         # offsets
         copier.src_x_in_bytes = sw*typesize
-        copier.src_x = sw
         copier.src_y = sw
+        copier.src_z = sw
 
         copier.src_pitch = local_array.strides[1]
         copier.dst_pitch = global_array.strides[1]
