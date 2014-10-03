@@ -14,20 +14,20 @@ comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
 
-npz = 3
-npy = 3
-npx = 3
+npz = 1
+npy = 1
+npx = 1
 
 assert(size == npx*npy*npz)
 
 mod = cuda.module_from_file('diffusion_kernel.cubin')
 func = mod.get_function('temperature_update16x16')
 
-nx = 30
-ny = 30
-nz = 30
-alpha = 1e-4
-dt = 0.1
+nx = 17
+ny = 17
+nz = 17
+alpha = 1.0
+dt = 0.0001
 
 dx = 1./((npx*nx)-1)
 dy = 1./((npy*ny)-1)
@@ -52,7 +52,7 @@ T1_local = np.zeros([nz+2, ny+2, nx+2], dtype=np.float64)
 T1_global = np.zeros([nz, ny, nx], dtype=np.float64)
 
 # set initial conditions:
-set_boundary_values(comm, T1_local, (100., 100., 100., 500., 100., 500.))
+set_boundary_values(comm, T1_local, (500., 100., 100., 100., 100., 100.))
 
 # transfer to gpu:
 T2_local_gpu = gpuarray.to_gpu(T2_local)
@@ -61,14 +61,11 @@ T1_global_gpu = gpuarray.to_gpu(T1_global)
 
 da.local_to_global(T1_local_gpu, T1_global_gpu)
 
-for step in range(5):
+np.set_printoptions(precision=2)
+for step in range(1000):
 
     da.global_to_local(T1_global_gpu, T1_local_gpu)
-
-    if rank == 21:
-        print T1_local_gpu.get()[-1,:,:]
-
-    func.prepared_call(((nx+2)/16, (ny+2)/16, 1), (16, 16, 1),
+    func.prepared_call((2, 2, 2), (16, 16, 1),
                         T1_local_gpu.gpudata, T2_local_gpu.gpudata,
                         alpha, dt,
                         nx+2, ny+2, nz+2,
@@ -76,6 +73,7 @@ for step in range(5):
 
     da.local_to_global(T2_local_gpu, T1_global_gpu)
 
-
+if rank == 0:
+    print T2_local_gpu.get()[1:-1,1:-1,1:-1]
+    print T1_global_gpu
 MPI.Finalize()
-
