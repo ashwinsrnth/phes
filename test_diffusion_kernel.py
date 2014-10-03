@@ -10,12 +10,13 @@ class TestDiffusionKernel(object):
         self.func = self.mod.get_function("temperature_update16x16")
 
     def test_prepared_call(self):        
+        
         f = np.ones([3, 3, 3], dtype=np.float64)
         f = f*np.array([1,2,3], dtype=np.float64)
         f_gpu = gpuarray.to_gpu(f)
 
-        dfdx = np.zeros([3, 3, 3], dtype=np.float64)
-        dfdx_gpu = gpuarray.to_gpu(dfdx)
+        f2 = np.zeros([3, 3, 3], dtype=np.float64)
+        f2_gpu = gpuarray.to_gpu(f2)
         
         # run the kernel:
         self.func.prepare([np.intp, np.intp, np.float64, np.float64,
@@ -23,7 +24,30 @@ class TestDiffusionKernel(object):
                                  np.float64, np.float64, np.float64])
 
         self.func.prepared_call((1,1,1), (16, 16, 1), 
-                           f_gpu.gpudata, dfdx_gpu.gpudata, 1., 1., 3, 3, 3, 1, 1, 1)
+                           f_gpu.gpudata, f2_gpu.gpudata, 1., 1., 3, 3, 3, 1, 1, 1)
 
-        f = f_gpu.get()
-        assert(f[1,1,1] == 2.0)
+       
+        f2 = f2_gpu.get()
+        assert(f2[1,1,1] == 2.0)
+
+    def test_inadequate_size(self):
+
+        f = np.ones([3, 3, 3], dtype=np.float64)
+        f = f*np.array([1,2,3], dtype=np.float64)
+        f_gpu = gpuarray.to_gpu(f)
+
+        f2 = np.zeros([3, 3, 3], dtype=np.float64)
+        f2_gpu = gpuarray.to_gpu(f2)
+        
+        # run the kernel:
+        self.func.prepare([np.intp, np.intp, np.float64, np.float64,
+                             np.intc, np.intc, np.intc, 
+                                 np.float64, np.float64, np.float64])
+
+        self.func.prepared_call((1,1,1), (1, 1, 1), 
+                           f_gpu.gpudata, f2_gpu.gpudata, 1., 1., 3, 3, 3, 1, 1, 1)
+        
+        f2 = f2_gpu.get()
+        assert(f2[1,1,1] != 2.0)
+
+
