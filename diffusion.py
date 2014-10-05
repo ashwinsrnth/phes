@@ -113,7 +113,7 @@ if rank == 13:
     print 'Communication: ', comm_time.sum()
     print 'Total: ', t_end-t_start
 
-# copy data back:
+# copy all the data to rank-0:
 T1_global = T1_global_gpu.get()
 T1_local = T1_local_gpu.get()
 
@@ -121,6 +121,7 @@ T1_full = None
 if rank == 0:
     T1_full = np.zeros([npz*nx, npy*ny, npx*nx], dtype=np.float64)
 
+# create the data-type required for the copy:
 proc_z, proc_y, proc_x = comm.Get_topo()[2]
 start_z, start_y, start_x = proc_z*nz, proc_y*ny, proc_x*nx
 subarray_aux = MPI.DOUBLE.Create_subarray([npz*nz, npy*ny, npx*nx], 
@@ -136,11 +137,13 @@ recvbuf = [displs, MPI.INT]
 comm.Gather(sendbuf, recvbuf, root=0)
 comm.Barrier()
 
+# perform the gather:
 comm.Gatherv([T1_global, MPI.DOUBLE],
              [T1_full,  np.ones(size, dtype=np.int), displs, subarray], root=0)
 
 subarray.Free()
 
+# plot the data at rank-0
 if rank == 0:
     from matplotlib.pyplot import contourf, savefig, pcolor, colorbar
     pcolor(T1_full[48, :, :], cmap='cool')
