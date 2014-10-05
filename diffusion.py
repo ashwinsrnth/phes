@@ -25,9 +25,9 @@ mod = cuda.module_from_file('diffusion_kernel.cubin')
 func = mod.get_function('temperature_update16x16')
 
 # local sizes:
-nx = 30
-ny = 30
-nz = 32
+nx = 94
+ny = 94
+nz = 96
 
 # global lengths:
 lx = 0.3
@@ -36,11 +36,14 @@ lz = 0.3
 
 # material properties:
 alpha = 1e-5
-dt = 0.1
 
 dx = lx/((npx*nx)-1)
 dy = ly/((npy*ny)-1)
 dz = lz/((npz*nz)-1)
+
+# compute dt for stability:
+dt = 0.1*(dx**2)/(alpha)
+nsteps = 1000
 
 # create communicator:
 comm = comm.Create_cart([npz, npy, npx])
@@ -69,11 +72,6 @@ T1_local_gpu = gpuarray.to_gpu(T1_local)
 T1_global_gpu = gpuarray.to_gpu(T1_global)
 
 da.local_to_global(T1_local_gpu, T1_global_gpu)
-comm.Barrier()
-
-#np.set_printoptions(precision=2)
-
-nsteps = 10000
 comm_time = np.zeros(nsteps)
 comp_time = np.zeros(nsteps)
 
@@ -82,14 +80,10 @@ t_start = time.time()
 start = cuda.Event()
 end = cuda.Event()
 
-T1_local = T1_local_gpu.get()
-
+# simulation loop:
 for step in range(nsteps):
 
-    t1 = time.time()
     da.global_to_local(T1_global_gpu, T1_local_gpu)
-    t2 = time.time()
-
     
     start.record()
     func.prepared_call(((nx+2)/16, (ny+2)/16, 1), (16, 16, 1),
@@ -99,18 +93,15 @@ for step in range(nsteps):
                         dx, dy, dz)
     end.record()
     end.synchronize()
-       
+    comm.Barrier()      
     comp_time[step] = start.time_till(end) * 1e-3
-    comm.Barrier()
-    
+        
     da.local_to_global(T2_local_gpu, T1_global_gpu)
-    comm_time[step] = t2-t1
 
 t_end = time.time()
 
-if rank == 13:
+if rank == 0:
     print 'Computation: ', comp_time.sum()
-    print 'Communication: ', comm_time.sum()
     print 'Total: ', t_end-t_start
 
 # copy all the data to rank-0:
@@ -119,9 +110,9 @@ T1_local = T1_local_gpu.get()
 
 T1_full = None
 if rank == 0:
-    T1_full = np.zeros([npz*nx, npy*ny, npx*nx], dtype=np.float64)
+    T1_full = np.zeros([npz*nz, npy*ny, npx*nx], dtype=np.float64)
 
-# create the data-type required for the copy:
+# create the MPI data-type required for the copy:
 proc_z, proc_y, proc_x = comm.Get_topo()[2]
 start_z, start_y, start_x = proc_z*nz, proc_y*ny, proc_x*nx
 subarray_aux = MPI.DOUBLE.Create_subarray([npz*nz, npy*ny, npx*nx], 
@@ -146,7 +137,7 @@ subarray.Free()
 # plot the data at rank-0
 if rank == 0:
     from matplotlib.pyplot import contourf, savefig, pcolor, colorbar
-    pcolor(T1_full[48, :, :], cmap='cool')
+    pcolor(T1_full[npz*nz/2, :, :], cmap='jet')
     colorbar()
     savefig('heat-solution.png')
 
