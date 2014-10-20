@@ -1,0 +1,5 @@
+*.cubin
+*.pyc
+gpuDA/performance
+gpuDA/tests
+gpuDA/Makefile
