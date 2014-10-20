@@ -1,0 +1,3 @@
+[submodule "gpuDA"]
+	path = gpuDA
+	url = https://github.com/ashwinsrnth/gpuDA
