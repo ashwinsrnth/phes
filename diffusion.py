@@ -25,9 +25,9 @@ mod = cuda.module_from_file('diffusion_kernel.cubin')
 func = mod.get_function('temperature_update16x16')
 
 # local sizes:
-nx = 94
-ny = 94
-nz = 96
+nx = 30
+ny = 30
+nz = 32
 
 # global lengths:
 lx = 0.3
@@ -59,19 +59,22 @@ proc_sizes = [npz, npy, npx]
 da = GpuDA(comm, local_dims, proc_sizes, 1)
 
 # create arrays:
-T2_local = np.ones([nz+2, ny+2, nx+2], dtype=np.float64)
-T1_local = np.zeros([nz+2, ny+2, nx+2], dtype=np.float64)
-T1_global = np.ones([nz, ny, nx], dtype=np.float64)
+T2_local_gpu = da.createLocalVec()
+T1_local_gpu = da.createLocalVec()
+T1_global_gpu = da.createGlobalVec()
+
+T2_local_gpu.fill(0)
+T1_local_gpu.fill(0)
+T1_global_gpu.fill(0)
+
+T1_local = T1_local_gpu.get()
 
 # set initial conditions:
-set_boundary_values(comm, T1_local, (500., -100., 500., -100., 0., 0.))
+set_boundary_values(da, T1_local, (100., 100., 100., 500., 100., 100.))
 
-# transfer to gpu:
-T2_local_gpu = gpuarray.to_gpu(T2_local)
-T1_local_gpu = gpuarray.to_gpu(T1_local)
-T1_global_gpu = gpuarray.to_gpu(T1_global)
+T1_local_gpu.set(T1_local)
 
-da.local_to_global(T1_local_gpu, T1_global_gpu)
+da.localToGlobal(T1_local_gpu, T1_global_gpu)
 comm_time = np.zeros(nsteps)
 comp_time = np.zeros(nsteps)
 
@@ -83,7 +86,7 @@ end = cuda.Event()
 # simulation loop:
 for step in range(nsteps):
 
-    da.global_to_local(T1_global_gpu, T1_local_gpu)
+    da.globalToLocal(T1_global_gpu, T1_local_gpu)
     
     start.record()
     func.prepared_call(((nx+2)/16, (ny+2)/16, 1), (16, 16, 1),
@@ -96,7 +99,7 @@ for step in range(nsteps):
     comm.Barrier()      
     comp_time[step] = start.time_till(end) * 1e-3
         
-    da.local_to_global(T2_local_gpu, T1_global_gpu)
+    da.localToGlobal(T2_local_gpu, T1_global_gpu)
 
 t_end = time.time()
 
