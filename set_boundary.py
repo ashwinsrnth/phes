@@ -1,7 +1,7 @@
 from mpi4py import MPI
 import numpy as np
 
-def set_boundary_values(comm, f, vals):
+def set_boundary_values(proc_sizes, local_dims, f, vals):
 
     # Set the boundary values for
     # a distributed array representing
@@ -11,12 +11,11 @@ def set_boundary_values(comm, f, vals):
     # Parameters:
     # ----------
     #
-    # comm:     An instance of MPI.Cartcomm
     # f:        Local portion of distributed array (with ghost points)
     # vals:     6-tuple of scalar boundary values (xlow, xhigh, ylow, yhigh, zlow, zhigh)
     
-    npz, npy, npx = comm.Get_topo()[0]
-    mz, my, mx = comm.Get_topo()[2]
+    npz, npy, npx = proc_sizes
+    mz, my, mx = local_dims
 
     # left and right (x)
     if mx == 0:
