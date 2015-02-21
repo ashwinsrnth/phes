@@ -1,3 +1,6 @@
 [submodule "gpuDA"]
 	path = gpuDA
 	url = https://github.com/ashwinsrnth/gpuDA
+[submodule "petsc-pycuda"]
+	path = petsc-pycuda
+	url = https://github.com/ashwinsrnth/petsc-pycuda

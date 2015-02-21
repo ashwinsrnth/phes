@@ -1,15 +1,18 @@
+from petsc4py import PETSc as petsc
 from mpi4py import MPI
 import pycuda.driver as cuda
 from pycuda import autoinit
 import pycuda.gpuarray as gpuarray
 import numpy as np
-
 import time
 import sys
 sys.path.append('gpuDA')
-
+sys.path.append('petsc-pycuda')
 from gpuDA import GpuDA
+import GPUArray
 from set_boundary import set_boundary_values
+
+da_backend = 'gpuDA'
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
@@ -25,8 +28,8 @@ mod = cuda.module_from_file('diffusion_kernel.cubin')
 func = mod.get_function('temperature_update16x16')
 
 # local sizes:
-nx = 30
-ny = 30
+nx = 32
+ny = 32
 nz = 32
 
 # global lengths:
@@ -56,9 +59,9 @@ func.prepare([np.intp, np.intp, np.float64, np.float64,
 # communication information for distributed array:
 local_dims = [nz, ny, nx]
 proc_sizes = [npz, npy, npx]
+
 da = GpuDA(comm, local_dims, proc_sizes, 1)
 
-# create arrays:
 T2_local_gpu = da.createLocalVec()
 T1_local_gpu = da.createLocalVec()
 T1_global_gpu = da.createGlobalVec()
@@ -67,14 +70,14 @@ T2_local_gpu.fill(0)
 T1_local_gpu.fill(0)
 T1_global_gpu.fill(0)
 
-T1_local = T1_local_gpu.get()
+T1_local_cpu = T1_local_gpu.get()
 
 # set initial conditions:
-set_boundary_values(da, T1_local, (100., 100., 100., 500., 100., 100.))
+set_boundary_values(da, T1_local_cpu, (100., 100., 100., 500., 100., 100.))
+T1_local_gpu.set(T1_local_cpu)
 
-T1_local_gpu.set(T1_local)
+da.local_to_global(T1_local_gpu, T1_global_gpu)
 
-da.localToGlobal(T1_local_gpu, T1_global_gpu)
 comm_time = np.zeros(nsteps)
 comp_time = np.zeros(nsteps)
 
@@ -86,7 +89,7 @@ end = cuda.Event()
 # simulation loop:
 for step in range(nsteps):
 
-    da.globalToLocal(T1_global_gpu, T1_local_gpu)
+    da.global_to_local(T1_global_gpu, T1_local_gpu)
     
     start.record()
     func.prepared_call(((nx+2)/16, (ny+2)/16, 1), (16, 16, 1),
@@ -98,18 +101,17 @@ for step in range(nsteps):
     end.synchronize()
     comm.Barrier()      
     comp_time[step] = start.time_till(end) * 1e-3
-        
-    da.localToGlobal(T2_local_gpu, T1_global_gpu)
+    da.local_to_global(T2_local_gpu, T1_global_gpu)
 
 t_end = time.time()
 
-if rank == 0:
+if rank == 13:
     print 'Computation: ', comp_time.sum()
     print 'Total: ', t_end-t_start
 
 # copy all the data to rank-0:
-T1_global = T1_global_gpu.get()
-T1_local = T1_local_gpu.get()
+T1_global_cpu = T1_global_gpu.get()
+T1_local_cpu = T1_local_gpu.get()
 
 T1_full = None
 if rank == 0:
@@ -132,7 +134,7 @@ comm.Gather(sendbuf, recvbuf, root=0)
 comm.Barrier()
 
 # perform the gather:
-comm.Gatherv([T1_global, MPI.DOUBLE],
+comm.Gatherv([T1_global_cpu, MPI.DOUBLE],
              [T1_full,  np.ones(size, dtype=np.int), displs, subarray], root=0)
 
 subarray.Free()
@@ -144,4 +146,4 @@ if rank == 0:
     colorbar()
     savefig('heat-solution.png')
 
-MPI.Finalize()
+
