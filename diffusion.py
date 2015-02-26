@@ -6,9 +6,8 @@ import numpy as np
 
 import time
 import sys
-sys.path.append('gpuDA')
 
-from gpuDA import GpuDA
+from gpuDA.gpuDA import GpuDA
 from set_boundary import set_boundary_values
 
 comm = MPI.COMM_WORLD
@@ -25,9 +24,9 @@ mod = cuda.module_from_file('diffusion_kernel.cubin')
 func = mod.get_function('temperature_update16x16')
 
 # local sizes:
-nx = 94
-ny = 94
-nz = 96
+nx = 510
+ny = 510
+nz = 512
 
 # global lengths:
 lx = 0.3
@@ -42,11 +41,11 @@ dy = ly/((npy*ny)-1)
 dz = lz/((npz*nz)-1)
 
 # compute dt for stability:
-dt = 0.1*(dx**2)/(alpha)
-nsteps = 1000
+dt = 0.1 *(dx**2)/(alpha)
+nsteps = 20
 
 # create communicator:
-comm = comm.Create_cart([npz, npy, npx])
+comm = comm.Create_cart([npz, npy, npx], reorder=False)
 
 # prepare kernel:
 func.prepare([np.intp, np.intp, np.float64, np.float64,
@@ -72,19 +71,21 @@ T1_local_gpu = gpuarray.to_gpu(T1_local)
 T1_global_gpu = gpuarray.to_gpu(T1_global)
 
 da.local_to_global(T1_local_gpu, T1_global_gpu)
-comm_time = np.zeros(nsteps)
-comp_time = np.zeros(nsteps)
 
-t_start = time.time()
+gtol_time = np.zeros(nsteps)
+comp_time = np.zeros(nsteps)
 
 start = cuda.Event()
 end = cuda.Event()
 
+t_start = time.time()
 # simulation loop:
 for step in range(nsteps):
-
+    t1 = time.time()
     da.global_to_local(T1_global_gpu, T1_local_gpu)
-    
+    t2 = time.time()
+    gtol_time[step] = t2-t1
+
     start.record()
     func.prepared_call(((nx+2)/16, (ny+2)/16, 1), (16, 16, 1),
                         T1_local_gpu.gpudata, T2_local_gpu.gpudata,
@@ -93,17 +94,18 @@ for step in range(nsteps):
                         dx, dy, dz)
     end.record()
     end.synchronize()
-    comm.Barrier()      
-    comp_time[step] = start.time_till(end) * 1e-3
-        
+    comp_time[step] = start.time_till(end)*1e-3
+
     da.local_to_global(T2_local_gpu, T1_global_gpu)
 
+comm.Barrier()
 t_end = time.time()
 
-if rank == 0:
-    print 'Computation: ', comp_time.sum()
+if rank == 13:
     print 'Total: ', t_end-t_start
-
+    print 'Comp: ', comp_time.sum()
+    print 'Comm: ', gtol_time.sum()
+'''
 # copy all the data to rank-0:
 T1_global = T1_global_gpu.get()
 T1_local = T1_local_gpu.get()
@@ -140,5 +142,5 @@ if rank == 0:
     pcolor(T1_full[npz*nz/2, :, :], cmap='jet')
     colorbar()
     savefig('heat-solution.png')
-
+'''
 MPI.Finalize()
