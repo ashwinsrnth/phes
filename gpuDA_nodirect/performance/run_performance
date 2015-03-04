@@ -1,0 +1,21 @@
+#!/bin/bash
+
+export MPIFLAGS="--mca btl_openib_warn_nonexistent_if 0 --mca btl_openib_want_cuda_gdr 0 --mca pml ob1"
+
+rm -f *timings.txt
+
+for halo_size in 8 16 32 64 128 256 512 1024 2048
+do
+    echo Running experiment for x-direction and halo size: $halo_size
+    mpiexec $MPIFLAGS -n 27 python time_gpuDA.py $halo_size $halo_size 3 >> x_timings.txt
+
+    echo Running experiment for y-direcion and halo size: $halo_size
+    mpiexec $MPIFLAGS -n 27 python time_gpuDA.py $halo_size 3 $halo_size >> y_timings.txt
+
+    echo Running experiment for z-direcion and halo size: $halo_size
+    mpiexec $MPIFLAGS -n 27 python time_gpuDA.py 3 $halo_size $halo_size >> z_timings.txt
+done
+
+python plot_performance.py
+
+rm -f *.pyc ../*.pyc
