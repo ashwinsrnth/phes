@@ -42,7 +42,7 @@ dz = lz/((npz*nz)-1)
 
 # compute dt for stability:
 dt = 0.1 *(dx**2)/(alpha)
-nsteps = 20
+nsteps = 1000
 
 # create communicator:
 comm = comm.Create_cart([npz, npy, npx], reorder=False)
@@ -83,6 +83,7 @@ t_start = time.time()
 for step in range(nsteps):
     t1 = time.time()
     da.global_to_local(T1_global_gpu, T1_local_gpu)
+    comm.Barrier()
     t2 = time.time()
     gtol_time[step] = t2-t1
 
