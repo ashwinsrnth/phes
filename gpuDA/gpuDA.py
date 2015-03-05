@@ -18,7 +18,6 @@ class GpuDA:
         self._create_halo_arrays()
    
     def global_to_local(self, global_array, local_array):
-        t1 = time.time()
         # Update the local array (which includes ghost points)
         # from the global array (which does not)
 
@@ -69,9 +68,6 @@ class GpuDA:
 
         requests = [req for req in  [req1, req2, req3, req4, req5, req6] if req != None]
         MPI.Request.Waitall(requests, [MPI.Status()]*len(requests))
-        t2 = time.time()
-        if self.rank == 13:
-            print 'All swaps: ', t2-t1
 
         # copy from recv halos to local_array:
         if self.has_neighbour('left'):

@@ -7,7 +7,7 @@ import numpy as np
 import time
 import sys
 
-from gpuDA.gpuDA import GpuDA
+from gpuDA_nodirect.gpuDA import GpuDA
 from set_boundary import set_boundary_values
 
 comm = MPI.COMM_WORLD
@@ -24,9 +24,9 @@ mod = cuda.module_from_file('diffusion_kernel.cubin')
 func = mod.get_function('temperature_update16x16')
 
 # local sizes:
-nx = 510
-ny = 510
-nz = 512
+nx = 254
+ny = 254
+nz = 256
 
 # global lengths:
 lx = 0.3
@@ -42,7 +42,7 @@ dz = lz/((npz*nz)-1)
 
 # compute dt for stability:
 dt = 0.1 *(dx**2)/(alpha)
-nsteps = 20
+nsteps = 50
 
 # create communicator:
 comm = comm.Create_cart([npz, npy, npx], reorder=False)
@@ -83,6 +83,7 @@ t_start = time.time()
 for step in range(nsteps):
     t1 = time.time()
     da.global_to_local(T1_global_gpu, T1_local_gpu)
+    comm.Barrier()
     t2 = time.time()
     gtol_time[step] = t2-t1
 
@@ -98,7 +99,6 @@ for step in range(nsteps):
 
     da.local_to_global(T2_local_gpu, T1_global_gpu)
 
-comm.Barrier()
 t_end = time.time()
 
 if rank == 13:
