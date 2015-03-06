@@ -3,12 +3,54 @@ import pycuda.driver as cuda
 from pycuda import autoinit
 import pycuda.gpuarray as gpuarray
 import numpy as np
-
 import time
 import sys
-
-from gpuDA_nodirect.gpuDA import GpuDA
 from set_boundary import set_boundary_values
+import argparse
+
+def diffusion_kernel(T1_local, T2_local,
+                      alpha, dt,
+                      NX, NY, NZ,
+                      dx, dy, dz):
+
+    T2_local[1:-1,1:-1,1:-1] = T1_local[1:-1,1:-1,1:-1] + alpha*dt*(
+            (T1_local[0:-2, 1:-1, 1:-1] - 2*T1_local[1:-1, 1:-1, 1:-1] + T1_local[2:, 1:-1, 1:-1])/dz**2. +
+            (T1_local[1:-1, 0:-2, 1:-1] - 2*T1_local[1:-1, 1:-1, 1:-1] + T1_local[1:-1, 2:, 1:-1])/dy**2. +
+            (T1_local[1:-1, 1:-1, 0:-2] - 2*T1_local[1:-1, 1:-1, 1:-1] + T1_local[1:-1, 1:-1, 2:])/dx**2.)
+
+
+
+
+# Parse command line arguments:
+parser = argparse.ArgumentParser()
+
+parser.add_argument('--local_size', dest='local_size', type=int, nargs=3, metavar=('NX', 'NY', 'NZ'),
+                    help='The problem size local to each process')
+parser.add_argument('--nsteps', dest='nsteps', type=int, default=10,
+                    help='Number of time steps')
+parser.add_argument('--use_gpu', dest='use_gpu',
+                    help='Use the gpu', action='store_true')
+parser.add_argument('--gpudirect', dest='gpudirect',
+                    help='Use GPUDirect for gpu-gpu communication (ignored if not using GPU)', action='store_true')
+parser.add_argument('--asynchronous', dest='asynchronous',
+                    help='Use asynchronous MPI calls', action='store_true')
+
+args = parser.parse_args()
+
+# Get the right GpuDA:
+if args.use_gpu:
+    if args.gpudirect and args.asynchronous:
+        from gpuDA.gpuDA import GpuDA
+    elif args.asynchronous:
+        from gpuDA_nodirect.gpuDA import GpuDA
+    elif args.gpudirect:
+        from gpuDA_synchronous.gpuDA import GpuDA
+    else:
+        from gpuDA_nodirect_synchronous.gpuDA import GpuDA
+    device = 'gpu'
+else:
+    from gpuDA_cpu.gpuDA import GpuDA
+    device = 'cpu'
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
@@ -20,13 +62,8 @@ npx = 3
 
 assert(size == npx*npy*npz)
 
-mod = cuda.module_from_file('diffusion_kernel.cubin')
-func = mod.get_function('temperature_update16x16')
-
-# local sizes:
-nx = 254
-ny = 254
-nz = 256
+nz, ny, nx = args.local_size
+nsteps = args.nsteps
 
 # global lengths:
 lx = 0.3
@@ -42,15 +79,18 @@ dz = lz/((npz*nz)-1)
 
 # compute dt for stability:
 dt = 0.1 *(dx**2)/(alpha)
-nsteps = 50
+
 
 # create communicator:
 comm = comm.Create_cart([npz, npy, npx], reorder=False)
 
-# prepare kernel:
-func.prepare([np.intp, np.intp, np.float64, np.float64,
-                np.intc, np.intc, np.intc,
-                    np.float64, np.float64, np.float64])
+if args.use_gpu:
+    # prepare kernel:
+    mod = cuda.module_from_file('diffusion_kernel.cubin')
+    func = mod.get_function('temperature_update16x16')
+    func.prepare([np.intp, np.intp, np.float64, np.float64,
+                    np.intc, np.intc, np.intc,
+                        np.float64, np.float64, np.float64])
 
 # communication information for distributed array:
 local_dims = [nz, ny, nx]
@@ -65,46 +105,75 @@ T1_global = np.ones([nz, ny, nx], dtype=np.float64)
 # set initial conditions:
 set_boundary_values(comm, T1_local, (500., -100., 500., -100., 0., 0.))
 
-# transfer to gpu:
-T2_local_gpu = gpuarray.to_gpu(T2_local)
-T1_local_gpu = gpuarray.to_gpu(T1_local)
-T1_global_gpu = gpuarray.to_gpu(T1_global)
+if args.use_gpu:
+    # transfer to gpu:
+    T2_local_gpu = gpuarray.to_gpu(T2_local)
+    T1_local_gpu = gpuarray.to_gpu(T1_local)
+    T1_global_gpu = gpuarray.to_gpu(T1_global)
 
-da.local_to_global(T1_local_gpu, T1_global_gpu)
+    da.local_to_global(T1_local_gpu, T1_global_gpu)
 
-gtol_time = np.zeros(nsteps)
-comp_time = np.zeros(nsteps)
+    gtol_time = np.zeros(nsteps)
+    comp_time = np.zeros(nsteps)
 
-start = cuda.Event()
-end = cuda.Event()
+    start = cuda.Event()
+    end = cuda.Event()
 
-t_start = time.time()
-# simulation loop:
-for step in range(nsteps):
-    t1 = time.time()
-    da.global_to_local(T1_global_gpu, T1_local_gpu)
-    comm.Barrier()
-    t2 = time.time()
-    gtol_time[step] = t2-t1
+    t_start = time.time()
+    # simulation loop:
+    for step in range(nsteps):
+        t1 = time.time()
+        da.global_to_local(T1_global_gpu, T1_local_gpu)
+        comm.Barrier()
+        t2 = time.time()
+        gtol_time[step] = t2-t1
 
-    start.record()
-    func.prepared_call(((nx+2)/16, (ny+2)/16, 1), (16, 16, 1),
-                        T1_local_gpu.gpudata, T2_local_gpu.gpudata,
-                        alpha, dt,
-                        nx+2, ny+2, nz+2,
-                        dx, dy, dz)
-    end.record()
-    end.synchronize()
-    comp_time[step] = start.time_till(end)*1e-3
+        start.record()
+        func.prepared_call(((nx+2)/16, (ny+2)/16, 1), (16, 16, 1),
+                            T1_local_gpu.gpudata, T2_local_gpu.gpudata,
+                            alpha, dt,
+                            nx+2, ny+2, nz+2,
+                            dx, dy, dz)
+        end.record()
+        end.synchronize()
+        comp_time[step] = start.time_till(end)*1e-3
 
-    da.local_to_global(T2_local_gpu, T1_global_gpu)
+        da.local_to_global(T2_local_gpu, T1_global_gpu)
 
-t_end = time.time()
+    t_end = time.time()
+
+else:
+    da.local_to_global(T1_local, T1_global)
+
+    gtol_time = np.zeros(nsteps)
+    comp_time = np.zeros(nsteps)
+
+    t_start = time.time()
+    # simulation loop:
+    for step in range(nsteps):
+        t1 = time.time()
+        da.global_to_local(T1_global, T1_local)
+        t2 = time.time()
+        gtol_time[step] = t2-t1
+
+        t1 = time.time()
+        diffusion_kernel(T1_local, T2_local,
+                          alpha, dt,
+                          nx+2, ny+2, nz+2,
+                          dx, dy, dz)
+        t2 = time.time()
+
+        comp_time[step] = t2-t1
+
+        da.local_to_global(T2_local, T1_global)
+
+    t_end = time.time()
 
 if rank == 13:
     print 'Total: ', t_end-t_start
     print 'Comp: ', comp_time.sum()
     print 'Comm: ', gtol_time.sum()
+
 '''
 # copy all the data to rank-0:
 T1_global = T1_global_gpu.get()
